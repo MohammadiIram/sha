@@ -1,20 +1,20 @@
 #!/bin/bash
 
 # File containing the repository URL and the path
-repo_url_file="repo_url.txt"
+config_file="repo_url.txt"
 
-# Check if the repository URL file exists
-if [ ! -f "$repo_url_file" ]; then
-  echo "Error: Repository URL file not found: $repo_url_file"
+# Check if the configuration file exists
+if [ ! -f "$config_file" ]; then
+  echo "Error: Configuration file not found: $config_file"
   exit 1
 fi
 
 # Read the repository URL and path from the file
-read -r repo_url file_path < <(cat "$repo_url_file" | awk -F';' '{print $1, $2}')
+read -r repo_url file_path < <(cat "$config_file" | awk -F';' '{print $1, $2}')
 
 # Validate that both the URL and the path have been read
 if [[ -z "$repo_url" || -z "$file_path" ]]; then
-  echo "Error: Repository URL or file path is missing in $repo_url_file"
+  echo "Error: Repository URL or file path is missing in $config_file"
   exit 1
 fi
 
