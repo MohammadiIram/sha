@@ -1,96 +1,102 @@
-# #!/bin/bash
+#!/bin/bash
 
-# # Path to the file containing the repository URLs and file paths
-# config_file="repo_url.txt"
+# File containing the repository URL and the path
+repo_url_file="repo_url.txt"
 
-# # Check if the config file exists
-# if [ ! -f "$config_file" ]; then
-#   echo "Error: Configuration file not found: $config_file"
-#   exit 1
-# fi
+# Check if the repository URL file exists
+if [ ! -f "$repo_url_file" ]; then
+  echo "Error: Repository URL file not found: $repo_url_file"
+  exit 1
+fi
 
-# # Function to fetch the latest 'rhoai' branch from a repository URL
-# fetch_latest_branch_name() {
-#   local repo_url="$1"
-#   local latest_branch=$(git ls-remote --heads "$repo_url" | grep 'rhoai' | awk -F'/' '{print $NF}' | sort -V | tail -1)
-#   if [ -z "$latest_branch" ]; then
-#     echo "Error: Unable to determine the latest branch name from $repo_url."
-#     exit 1
-#   fi
-#   echo "$latest_branch"
-# }
+# Read the repository URL and path from the file
+read -r repo_url file_path < <(cat "$repo_url_file" | awk -F';' '{print $1, $2}')
 
-# # Function to check SHAs and print results
-# extract_names_with_att_extension() {
-#  local tag="$1"
-#  local repo_hash="$2"
+# Validate that both the URL and the path have been read
+if [[ -z "$repo_url" || -z "$file_path" ]]; then
+  echo "Error: Repository URL or file path is missing in $repo_url_file"
+  exit 1
+fi
 
-#  json_response=$(curl -s https://quay.io/api/v1/repository/modh/$tag/tag/ | jq -r '.tags | .[:3] | map(select(.name | endswith(".att"))) | .[].name')
-#  local quay_hash=$(echo "$json_response" | sed 's/^sha256-\(.*\)\.att$/\1/')
-#  # echo "$quay_hash"
+# Function to fetch the latest branch with a specific pattern, or default to master if not found
+fetch_latest_branch() {
+  local repo_url="$1"
+  local pattern="${2:-rhoai}"
+  local branch=$(git ls-remote --heads "$repo_url" | grep "$pattern" | awk -F'/' '{print $NF}' | sort -V | tail -1)
+  if [ -z "$branch" ]; then
+    echo "No branch matching the pattern '$pattern' found. Defaulting to 'master'."
+    branch="master"
+  fi
+  echo "$branch"
+}
 
-# if [ "$repo_hash" = "$quay_hash" ]; then
-#      echo -e "\e[32mRepository SHA ($repo_hash) matches Quay SHA ($quay_hash) for tag: $tag\e[0m"
-#  else
-#      echo -e "\e[31mRepository SHA ($repo_hash) does NOT match Quay SHA ($quay_hash) for tag: $tag\e[0m"
-#      sha_mismatch_found=1
-#  fi
-# }
+# Determine the branch name based on input argument
+if [ $# -eq 1 ]; then
+  if [ "$1" = "latest" ]; then
+    branch_name=$(fetch_latest_branch "$repo_url")
+  else
+    branch_name="$1"
+  fi
+else
+  branch_name=$(fetch_latest_branch "$repo_url")
+fi
 
-# # Initialize a variable to keep track of SHA mismatches
-# sha_mismatch_found=0
+echo "Attempting to clone the branch '$branch_name' from '$repo_url' into 'kserve' directory..."
 
-# # Main logic for processing the file and SHAs
-# main() {
-#   local specified_branch="${1:-}"
+# Clone the specified branch of the repository
+git clone --depth 1 -b "$branch_name" "$repo_url" "kserve"
+if [ $? -ne 0 ]; then
+  echo "Error: Failed to clone branch '$branch_name' from '$repo_url'"
+  exit 1
+else
+  echo "Successfully cloned the branch '$branch_name'."
+fi
 
-#   while IFS=';' read -r repo_url file_path; do
-#     # Determine the branch to use: specified as argument or fetch the latest 'rhoai'
-#     local branch_name="${specified_branch:-$(fetch_latest_branch_name "$repo_url")}"
+# Define the full path to the file you want to check in the cloned directory
+full_path="kserve/$file_path"
 
-#     echo "Processing $repo_url with path $file_path and branch $branch_name..."
+# Initialize a variable to keep track of SHA mismatches
+sha_mismatch_found=0
 
-#     # Extract the directory name from the repository URL
-#     dir_name=$(basename "$repo_url" .git)
+# Function to check SHAs and print results
+extract_names_with_sbom_extension() {
+ local tag="$1"
+ local repo_hash="$2"
 
-#     echo "Attempting to clone the branch '$branch_name' from '$repo_url' into directory '$dir_name'..."
+ json_response=$(curl -s https://quay.io/api/v1/repository/modh/$tag/tag/ | jq -r '.tags | .[:3] | map(select(.name | endswith(".att"))) | .[].name')
+ local quay_hash=$(echo "$json_response" | sed 's/^sha256-\(.*\)\.att$/\1/')
 
-#     # Clone the specified branch of the repository into a directory named after the repository
-#     git clone --depth 1 -b "$branch_name" "$repo_url" "$dir_name"
-#     if [ $? -ne 0 ]; then
-#       echo "Error: Failed to clone branch '$branch_name' from '$repo_url'"
-#       continue  # Skip to the next repository if cloning fails
-#     else
-#       echo "Successfully cloned the branch '$branch_name'."
-#     fi
+ if [ "$repo_hash" = "$quay_hash" ]; then
+     echo -e "\e[32mRepository SHA ($repo_hash) matches Quay SHA ($quay_hash) for tag: $tag\e[0m"
+ else
+     echo -e "\e[31mRepository SHA ($repo_hash) does NOT match Quay SHA ($quay_hash) for tag: $tag\e[0m"
+     sha_mismatch_found=1
+ fi
+}
 
-#     # Define full path to check the specified file within the cloned directory
-#     full_path="$dir_name/$file_path"
-#     if [ -f "$full_path" ]; then
-#       echo "File found: $full_path"
-#       # Read the file and extract SHAs
-#       while IFS= read -r line; do
-#           local name=$(echo "$line" | cut -d'=' -f1)
-#           local hash=$(echo "$line" | awk -F 'sha256:' '{print $2}')
-#           extract_names_with_att_extension "$name" "$hash"
-#       done < "$full_path"
-#     else
-#       echo "File not found: $full_path"
-#     fi
+# Main logic for processing the file and SHAs
+main() {
+ if [ -f "$full_path" ]; then
+     echo "File found: $full_path"
+     local input=$(<"$full_path")
 
-#     # Clean up the directory for the next iteration
-#     rm -rf "$dir_name"
+     while IFS= read -r line; do
+         local name=$(echo "$line" | cut -d'=' -f1)
+         local hash=$(echo "$line" | awk -F 'sha256:' '{print $2}')
+         extract_names_with_sbom_extension "$name" "$hash"
+     done <<< "$input"
+ else
+     echo "File not found: $full_path"
+ fi
 
-#   done < "$config_file"
+ # Check if any SHA mismatches were found
+ if [ "$sha_mismatch_found" -ne 0 ]; then
+     echo "One or more SHA mismatches were found."
+     exit 1
+ else
+     echo "All SHA hashes match."
+ fi
+}
 
-#   # Check if any SHA mismatches were found
-#   if [ "$sha_mismatch_found" -ne 0 ]; then
-#       echo "One or more SHA mismatches were found."
-#       exit 1
-#   else
-#       echo "All SHA hashes match."
-#   fi
-# }
-
-# # Execute the main logic with an optional branch name
-# main "$1"
+# Execute the main logic
+main
